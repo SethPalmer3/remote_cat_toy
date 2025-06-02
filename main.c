@@ -8,7 +8,7 @@
 #include "callbacks.h"
 #define WIFI_SSID "MOTOA060"
 #define WIFI_PASS "808n7ne2u3"
-#define TCP_SERVER_PORT 8080
+#define TCP_SERVER_PORT 80
 
 #define MAX_TRIES 5
 

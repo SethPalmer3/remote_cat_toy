@@ -1,6 +1,21 @@
 #include "callbacks.h"
 #include "pico/stdlib.h"
 #include <stdio.h>
+#include <string.h>
+#define SIMPLE_CALLBACK "Hello\0"
+
+// The C string for the HTTP response
+const char *http_response =
+    "HTTP/1.1 200 OK\r\n"
+    "Content-Type: text/html\r\n"
+    "Content-Length: 5\r\n" // Length of the body "hello"
+    "Connection: close\r\n" // Tell client to close connection after this
+                            // response
+    "\r\n"                  // End of headers
+    "hello";                // The body
+
+// Calculate the total length of this string for sending
+// strlen(http_response) would give you this.
 
 static void show_characters(char *s, int len) {
   for (int i = 0; i < len; i++) {
@@ -24,7 +39,8 @@ err_t tcp_server_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
     printf("received %u bytes: ", p->tot_len);
     show_characters(p->payload, p->tot_len);
     // Responding
-    if (tcp_write(tpcb, (void *)p->payload, p->tot_len, TCP_WRITE_FLAG_COPY)) {
+    if (tcp_write(tpcb, http_response, strlen(http_response),
+                  TCP_WRITE_FLAG_COPY)) {
       printf("Failed to respond\n");
     } else {
       tcp_output(tpcb);
