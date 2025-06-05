@@ -4,41 +4,53 @@
 #include <stdlib.h>
 #include <string.h>
 #define SIMPLE_CALLBACK "Hello\0"
+#define GEN_ACTION(x) "GET /button?action=" #x
 
 char http_headers[512];
 // The C string for the HTTP response
 char *http_body =
-    "<!DOCTYPE html>\n"
-    "<html>\n"
-    "<head>\n"
-    "<title>Directional Buttons</title>\n"
-    "</head>\n"
-    "<body>\n"
-    "<center>\n"
-    "<p>\n"
-    "<button type=\"button\" id=\"buttonUp\">Up</button>\n"
-    "</p>\n"
-    "<p>\n"
-    "<button type=\"button\" id=\"buttonLeft\" style=\"margin-right: \n"
-    "40px;\">Left</button>\n"
-    "<button type=\"button\" id=\"buttonRight\" style=\"margin-left: \n"
-    "40px;\">Right</button>\n"
-    "</p>\n"
-    "<p>\n"
-    "<button type=\"button\" id=\"buttonDown\">Down</button>\n"
-    "</p>\n"
-    "</center>\n"
-    "</body>\n"
-    "</html>\n"; // The body
+    "<!DOCTYPE html>"
+    "<html>"
+    "<head>"
+    "<title>Directional Buttons</title>"
+    "<script>"
+    "function sendButtonPress(direction) {"
+    "fetch('/button?action=' + direction)"
+    ".then(response => {"
+    "if (response.ok) {"
+    "console.log(direction + ' button press sent successfully.');"
+    "} else {"
+    "console.error('Failed to send ' + direction + ' button press. Status: ' + "
+    "response.status);"
+    "}"
+    "})"
+    ".catch(error => {"
+    "console.error('Error sending ' + direction + ' button press:', error);"
+    "});"
+    "}"
+    "</script>"
+    "</head>"
+    "<body>"
+    "<center>"
+    "<p>"
+    "<button type=\"button\" id=\"buttonUp\" "
+    "onclick=\"sendButtonPress('up')\">Up</button>"
+    "</p>"
+    "<p>"
+    "<button type=\"button\" id=\"buttonLeft\" style=\"margin-right: 40px;\" "
+    "onclick=\"sendButtonPress('left')\">Left</button>"
+    "<button type=\"button\" id=\"buttonRight\" style=\"margin-left: 40px;\" "
+    "onclick=\"sendButtonPress('right')\">Right</button>"
+    "</p>"
+    "<p>"
+    "<button type=\"button\" id=\"buttonDown\" "
+    "onclick=\"sendButtonPress('down')\">Down</button>"
+    "</p>"
+    "</center>"
+    "</body>"
+    "</html>";
 // Calculate the total length of this string for sending
 // strlen(http_response) would give you this.
-
-static void show_characters(char *s, int len) {
-  for (int i = 0; i < len; i++) {
-    printf("%c", s[i]);
-  }
-  printf("\n");
-}
 
 // Callback function for receiving data
 err_t tcp_server_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
@@ -52,8 +64,28 @@ err_t tcp_server_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
 
   if (err == ERR_OK) {
     tcp_recved(tpcb, p->tot_len);
-    printf("received %u bytes: ", p->tot_len);
-    show_characters(p->payload, p->tot_len);
+    printf(" -- received %u bytes: \n", p->tot_len);
+
+    printf("%.*s\n", p->tot_len, p->payload);
+    printf("testing [%.*s] against [%s]\n\n", p->payload,
+           strlen(GEN_ACTION(up)), GEN_ACTION(up));
+    // Checking if the request was a action
+    if (strncmp(p->payload, GEN_ACTION(up), strlen(GEN_ACTION(up))) == 0) {
+      // Move forward
+      printf("[Action]Moving forward\n");
+    } else if (strncmp(p->payload, GEN_ACTION(down),
+                       strlen(GEN_ACTION(down))) == 0) {
+      // Move forward
+      printf("[Action]Moving back\n");
+    } else if (strncmp(p->payload, GEN_ACTION(left),
+                       strlen(GEN_ACTION(left))) == 0) {
+      // Move forward
+      printf("[Action]Moving left\n");
+    } else if (strncmp(p->payload, GEN_ACTION(right),
+                       strlen(GEN_ACTION(right))) == 0) {
+      // Move forward
+      printf("[Action]Moving right\n");
+    }
     // Responding
     int body_len = strlen(http_body);
     printf("body length: %d\n", body_len);
