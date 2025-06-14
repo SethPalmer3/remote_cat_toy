@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "callbacks.h"
+#include "storage.h"
 #define WIFI_SSID "MOTOA060"
 #define WIFI_PASS "808n7ne2u3"
 #define TCP_SERVER_PORT 80
