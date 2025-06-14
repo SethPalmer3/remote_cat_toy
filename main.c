@@ -1,3 +1,5 @@
+#include "hardware/flash.h"
+#include "hardware/sync.h"
 #include "lwip/tcp.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
@@ -7,6 +9,8 @@
 
 #include "callbacks.h"
 #include "storage.h"
+// #include "storage.h"
+
 #define WIFI_SSID "MOTOA060"
 #define WIFI_PASS "808n7ne2u3"
 #define TCP_SERVER_PORT 80
@@ -15,6 +19,7 @@
 
 int main(void) {
   stdio_init_all();
+  printf("%d", FLASH_SECTOR_SIZE);
   if (cyw43_arch_init_with_country(CYW43_COUNTRY_USA)) {
     printf("failed to initalise\n");
     return 1;
@@ -66,6 +71,11 @@ int main(void) {
   tcp_arg(pcb, NULL);
   tcp_accept(pcb, tcp_server_accept_callback);
   printf("accept callback registered. server is ready\n");
+
+  store_ssid("Testing");
+  printf("%s", read_ssid());
+  store_password("Testing pass");
+  printf("%s", read_password());
 
   while (1) {
     sleep_ms(1000);
