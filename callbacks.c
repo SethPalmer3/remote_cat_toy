@@ -8,7 +8,7 @@
 
 char http_headers[512];
 // The C string for the HTTP response
-char *http_body =
+char *controller_html =
     "<!DOCTYPE html>"
     "<html>"
     "<head>"
@@ -113,7 +113,7 @@ err_t tcp_server_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
       printf("[Action]Moving right\n");
     }
     // Responding
-    int body_len = strlen(http_body);
+    int body_len = strlen(controller_html);
     printf("body length: %d\n", body_len);
     // Dynamically adding the length of the body
     (void)sprintf(http_headers,
@@ -128,12 +128,11 @@ err_t tcp_server_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
     printf("length of http response: %d\n",
            (int)strlen(http_headers) + body_len);
     strcpy(http_response, http_headers);
-    strcpy(http_response + strlen(http_headers), http_body);
+    strcpy(http_response + strlen(http_headers), controller_html);
     if (tcp_write(tpcb, http_response, strlen(http_response),
                   TCP_WRITE_FLAG_COPY)) {
       printf("Failed to respond\n");
     } else {
-
       tcp_output(tpcb);
     }
     free(http_response);

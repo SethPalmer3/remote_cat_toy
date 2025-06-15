@@ -9,10 +9,9 @@
 
 #include "callbacks.h"
 #include "storage.h"
+#include "wifi_saver.h"
 // #include "storage.h"
 
-#define WIFI_SSID "MOTOA060"
-#define WIFI_PASS "808n7ne2u3"
 #define TCP_SERVER_PORT 80
 
 #define MAX_TRIES 5
@@ -29,15 +28,22 @@ int main(void) {
   printf("station mode enabled\n");
 
   int tries = 0;
-  while (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASS,
-                                            CYW43_AUTH_WPA2_AES_PSK, 10000) &&
+  char ssid[SSID_MAX_LEN];
+  char pass[MAX_PASS_LEN];
+  memcpy(ssid, read_ssid(), SSID_MAX_LEN);
+  memcpy(pass, read_password(), MAX_PASS_LEN);
+retry:
+  printf("Trying to connect to %s, with %s\n", ssid, pass);
+  while (cyw43_arch_wifi_connect_timeout_ms(ssid, pass, CYW43_AUTH_WPA2_AES_PSK,
+                                            10000) &&
          tries < MAX_TRIES) {
     printf("failed to connect, retrying\n");
     tries++;
   }
   if (tries >= MAX_TRIES) {
-    printf("Could not connect, exiting\n");
-    return 1;
+    printf("Starting own AP\n");
+    collect_wifi();
+    goto retry;
   }
   printf("connected\n");
   struct tcp_pcb *pcb;
@@ -71,11 +77,6 @@ int main(void) {
   tcp_arg(pcb, NULL);
   tcp_accept(pcb, tcp_server_accept_callback);
   printf("accept callback registered. server is ready\n");
-
-  store_ssid("Testing");
-  printf("%s", read_ssid());
-  store_password("Testing pass");
-  printf("%s", read_password());
 
   while (1) {
     sleep_ms(1000);
