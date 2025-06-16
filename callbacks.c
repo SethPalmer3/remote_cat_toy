@@ -1,10 +1,35 @@
 #include "callbacks.h"
+#include "hardware/watchdog.h"
 #include "pico/stdlib.h"
+#include "storage.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #define SIMPLE_CALLBACK "Hello\0"
 #define GEN_ACTION(x) "GET /button?action=" #x
+
+// A helper function to find URL-encoded data in the request body
+char *url_decode_in_place(char *str) {
+  // This is a simple in-place url-decode function.
+  // A more robust version would handle more cases.
+  char *a = str;
+  char *b = str;
+  while (*a) {
+    if (*a == '%' && isxdigit((unsigned char)*(a + 1)) &&
+        isxdigit((unsigned char)*(a + 2))) {
+      char hex[3] = {*(a + 1), *(a + 2), 0};
+      *b++ = strtol(hex, NULL, 16);
+      a += 3;
+    } else if (*a == '+') {
+      *b++ = ' ';
+      a++;
+    } else {
+      *b++ = *a++;
+    }
+  }
+  *b = '\0';
+  return str;
+}
 
 char http_headers[512];
 // The C string for the HTTP response
@@ -75,8 +100,71 @@ char *controller_html =
     "</center>"
     "</body>"
     "</html>";
+
+char *WIFI_PROVISIONING_HTML =
+    "<!DOCTYPE html>"
+    "<html>"
+    "<head><title>Pico W Wi-Fi Setup</title></head>"
+    "<body>"
+    "<h1>Wi-Fi Setup for Your Device</h1>"
+    "<p>Please enter the credentials for your Wi-Fi network.</p>"
+    "<form action=\"/save\" method=\"post\">"
+    "<label for=\"ssid\">SSID:</label><br>"
+    "<input type=\"text\" id=\"ssid\" name=\"ssid\"><br><br>"
+    "<label for=\"pass\">Password:</label><br>"
+    "<input type=\"password\" id=\"pass\" name=\"pass\"><br><br>"
+    "<input type=\"submit\" value=\"Save and Reboot\">"
+    "</form>"
+    "</body>"
+    "</html>";
 // Calculate the total length of this string for sending
 // strlen(http_response) would give you this.
+
+void handle_action(struct pbuf *p) {
+
+  printf("%.*s\n", p->tot_len, p->payload);
+  printf("testing [%.*s] against [%s]\n\n", p->payload, strlen(GEN_ACTION(up)),
+         GEN_ACTION(up));
+  // Checking if the request was a action
+  if (strncmp(p->payload, GEN_ACTION(up), strlen(GEN_ACTION(up))) == 0) {
+    // Move forward
+    printf("[Action]Moving forward\n");
+  } else if (strncmp(p->payload, GEN_ACTION(down), strlen(GEN_ACTION(down))) ==
+             0) {
+    // Move forward
+    printf("[Action]Moving back\n");
+  } else if (strncmp(p->payload, GEN_ACTION(left), strlen(GEN_ACTION(left))) ==
+             0) {
+    // Move forward
+    printf("[Action]Moving left\n");
+  } else if (strncmp(p->payload, GEN_ACTION(right),
+                     strlen(GEN_ACTION(right))) == 0) {
+    // Move forward
+    printf("[Action]Moving right\n");
+  }
+}
+
+/* Assists in http response construction
+ * html_body is the contents of the html page that needs rendering
+ */
+char *construct_response_string(char *html_body) {
+  int body_len = strlen(html_body);
+  printf("body length: %d\n", body_len);
+  // Dynamically adding the length of the body
+  (void)sprintf(http_headers,
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/html\r\n"
+                "Content-Length: %d\r\n" // Length of the body
+                "Connection: close\r\n"  // Tell client to close connection
+                "\r\n",                  // End of headers
+                body_len);
+  char *http_response =
+      (char *)malloc(sizeof(char) * (strlen(http_headers) + body_len));
+  printf("length of http response: %d\n", (int)strlen(http_headers) + body_len);
+  strcpy(http_response, http_headers);
+  strcpy(http_response + strlen(http_headers), html_body);
+  return http_response;
+}
 
 // Callback function for receiving data
 err_t tcp_server_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
@@ -89,55 +177,92 @@ err_t tcp_server_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
   }
 
   if (err == ERR_OK) {
-    tcp_recved(tpcb, p->tot_len);
-    printf(" -- received %u bytes: \n", p->tot_len);
+    if (provisioning_mode) {
 
-    printf("%.*s\n", p->tot_len, p->payload);
-    printf("testing [%.*s] against [%s]\n\n", p->payload,
-           strlen(GEN_ACTION(up)), GEN_ACTION(up));
-    // Checking if the request was a action
-    if (strncmp(p->payload, GEN_ACTION(up), strlen(GEN_ACTION(up))) == 0) {
-      // Move forward
-      printf("[Action]Moving forward\n");
-    } else if (strncmp(p->payload, GEN_ACTION(down),
-                       strlen(GEN_ACTION(down))) == 0) {
-      // Move forward
-      printf("[Action]Moving back\n");
-    } else if (strncmp(p->payload, GEN_ACTION(left),
-                       strlen(GEN_ACTION(left))) == 0) {
-      // Move forward
-      printf("[Action]Moving left\n");
-    } else if (strncmp(p->payload, GEN_ACTION(right),
-                       strlen(GEN_ACTION(right))) == 0) {
-      // Move forward
-      printf("[Action]Moving right\n");
+      char *request = (char *)p->payload;
+
+      // Handle GET / request - serve the configuration page
+      if (strncmp(request, "GET / ", strlen("GET / ")) == 0) {
+        printf("Serving Wi-Fi configuration page.\n");
+        // Construct and send the HTTP response with the form
+        char http_header[256];
+        sprintf(http_header,
+                "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: "
+                "close\r\nContent-Type: text/html\r\n\r\n",
+                strlen(WIFI_PROVISIONING_HTML));
+        tcp_write(tpcb, http_header, strlen(http_header), TCP_WRITE_FLAG_COPY);
+        tcp_write(tpcb, WIFI_PROVISIONING_HTML, strlen(WIFI_PROVISIONING_HTML),
+                  TCP_WRITE_FLAG_COPY);
+        tcp_output(tpcb);
+      }
+      // Handle POST /save request - save credentials
+      else if (strncmp(request, "POST /save ", strlen("POST /save ")) == 0) {
+        printf("Received POST request to save credentials.\n");
+        // Find the start of the body data (after the \r\n\r\n)
+        char *body = strstr(request, "\r\n\r\n");
+        if (body) {
+          body += 4; // Move pointer past the \r\n\r\n
+
+          // Simple parsing for ssid=...&pass=...
+          char *ssid_ptr = strstr(body, "ssid=");
+          char *pass_ptr = strstr(body, "pass=");
+
+          if (ssid_ptr && pass_ptr) {
+            ssid_ptr += 5; // Move past "ssid="
+            pass_ptr += 5; // Move past "pass="
+
+            // Terminate the SSID string at the '&'
+            char *ampersand = strchr(ssid_ptr, '&');
+            if (ampersand)
+              *ampersand = '\0';
+
+            // URL-decode the values in place
+            url_decode_in_place(ssid_ptr);
+            url_decode_in_place(pass_ptr);
+
+            printf("Parsed SSID: '%s'\n", ssid_ptr);
+            printf("Parsed Password: '%s'\n", pass_ptr);
+
+            // Use your existing storage functions
+            store_ssid(ssid_ptr);
+            store_password(pass_ptr);
+            printf("Stored SSID: %s, Stored Pass: %s\n", read_ssid(),
+                   read_password());
+
+            // Send a success response and reboot
+            const char *success_response =
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
+                "<html><body><h1>Credentials Saved!</h1><p>The device will now "
+                "reboot and connect to the new network.</p></body></html>";
+            tcp_write(tpcb, success_response, strlen(success_response),
+                      TCP_WRITE_FLAG_COPY);
+            tcp_output(tpcb);
+            sleep_ms(100); // Give time for the response to be sent
+
+            printf("Rebooting in 2 seconds...\n");
+            sleep_ms(2000);
+            watchdog_reboot(0, 0, 0);
+          }
+        }
+      }
+    } else { // Non-provisioning code(controller)
+
+      char *http_response = construct_response_string(controller_html);
+      tcp_recved(tpcb, p->tot_len);
+      printf(" -- received %u bytes: \n", p->tot_len);
+
+      // Responding
+      if (tcp_write(tpcb, http_response, strlen(http_response),
+                    TCP_WRITE_FLAG_COPY)) {
+        printf("Failed to respond\n");
+      } else {
+        tcp_output(tpcb);
+      }
+      free(http_response);
+      pbuf_free(p);
+      return tcp_close(tpcb);
     }
-    // Responding
-    int body_len = strlen(controller_html);
-    printf("body length: %d\n", body_len);
-    // Dynamically adding the length of the body
-    (void)sprintf(http_headers,
-                  "HTTP/1.1 200 OK\r\n"
-                  "Content-Type: text/html\r\n"
-                  "Content-Length: %d\r\n" // Length of the body
-                  "Connection: close\r\n"  // Tell client to close connection
-                  "\r\n",                  // End of headers
-                  body_len);
-    char *http_response =
-        (char *)malloc(sizeof(char) * (strlen(http_headers) + body_len));
-    printf("length of http response: %d\n",
-           (int)strlen(http_headers) + body_len);
-    strcpy(http_response, http_headers);
-    strcpy(http_response + strlen(http_headers), controller_html);
-    if (tcp_write(tpcb, http_response, strlen(http_response),
-                  TCP_WRITE_FLAG_COPY)) {
-      printf("Failed to respond\n");
-    } else {
-      tcp_output(tpcb);
-    }
-    free(http_response);
-    pbuf_free(p);
-    return tcp_close(tpcb);
+
   } else {
     printf("recieve error: %d\n", err);
     pbuf_free(p);
