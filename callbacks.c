@@ -158,6 +158,7 @@ char *http_response_content(char *html_body) {
   printf("length of http response: %d\n", (int)strlen(http_headers) + body_len);
   strcpy(http_response, http_headers);
   strcpy(http_response + strlen(http_headers), html_body);
+  return http_response;
 }
 
 err_t tcp_server_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
