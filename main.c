@@ -14,9 +14,7 @@
 
 #define TCP_SERVER_PORT 80
 
-#define MAX_TRIES 1
-
-int provisioning_mode;
+#define MAX_TRIES 5
 
 int main(void) {
   stdio_init_all();
@@ -34,6 +32,7 @@ int main(void) {
   char pass[MAX_PASS_LEN];
   memcpy(ssid, read_ssid(), SSID_MAX_LEN);
   memcpy(pass, read_password(), MAX_PASS_LEN);
+retry:
   printf("Trying to connect to %s, with %s\n", ssid, pass);
   while (cyw43_arch_wifi_connect_timeout_ms(ssid, pass, CYW43_AUTH_WPA2_AES_PSK,
                                             10000) &&
@@ -41,48 +40,46 @@ int main(void) {
     printf("failed to connect, retrying\n");
     tries++;
   }
-  if (tries >= MAX_TRIES) { // Checking if need provisioning
+  if (tries >= MAX_TRIES) {
     printf("Starting own AP\n");
-    provisioning_mode = 1;
     collect_wifi();
-  } else { // No provision needed
-    provisioning_mode = 0;
-    printf("connected\n");
-    struct tcp_pcb *pcb;
-    pcb = tcp_new_ip_type(IPADDR_TYPE_ANY);
-    if (!pcb) {
-      printf("failed to create tcp pcb\n");
-      return EXIT_FAILURE;
-    }
-    printf("tcp pcb created\n");
+    goto retry;
+  }
+  printf("connected\n");
+  struct tcp_pcb *pcb;
+  pcb = tcp_new_ip_type(IPADDR_TYPE_ANY);
+  if (!pcb) {
+    printf("failed to create tcp pcb\n");
+    return EXIT_FAILURE;
+  }
+  printf("tcp pcb created\n");
 
-    err_t err = tcp_bind(pcb, IP_ANY_TYPE, TCP_SERVER_PORT);
-    if (err != ERR_OK) {
-      printf("failed to bind tcp pcb, error: %d\n", err);
+  err_t err = tcp_bind(pcb, IP_ANY_TYPE, TCP_SERVER_PORT);
+  if (err != ERR_OK) {
+    printf("failed to bind tcp pcb, error: %d\n", err);
+    tcp_close(pcb);
+    return EXIT_FAILURE;
+  }
+
+  printf("tcp pcb bound to port %d\n", TCP_SERVER_PORT);
+
+  struct tcp_pcb *listening_pcb = tcp_listen_with_backlog(pcb, 1);
+  if (!listening_pcb) {
+    printf("failed to listen on tcp pcb\n");
+    if (pcb)
       tcp_close(pcb);
-      return EXIT_FAILURE;
-    }
+    return EXIT_FAILURE;
+  }
 
-    printf("tcp pcb bound to port %d\n", TCP_SERVER_PORT);
+  pcb = listening_pcb;
+  printf("tcp server listening on port: %d\n", TCP_SERVER_PORT);
 
-    struct tcp_pcb *listening_pcb = tcp_listen_with_backlog(pcb, 1);
-    if (!listening_pcb) {
-      printf("failed to listen on tcp pcb\n");
-      if (pcb)
-        tcp_close(pcb);
-      return EXIT_FAILURE;
-    }
+  tcp_arg(pcb, NULL);
+  tcp_accept(pcb, tcp_server_accept_callback);
+  printf("accept callback registered. server is ready\n");
 
-    pcb = listening_pcb;
-    printf("tcp server listening on port: %d\n", TCP_SERVER_PORT);
-
-    tcp_arg(pcb, NULL);
-    tcp_accept(pcb, tcp_server_accept_callback);
-    printf("accept callback registered. server is ready\n");
-
-    while (1) {
-      sleep_ms(1000);
-    }
+  while (1) {
+    sleep_ms(1000);
   }
   return EXIT_SUCCESS;
 }
