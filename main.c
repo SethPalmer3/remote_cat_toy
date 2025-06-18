@@ -20,12 +20,12 @@ int provision_mode = 0;
 
 int main(void) {
   stdio_init_all();
-  printf("%d", FLASH_SECTOR_SIZE);
   if (cyw43_arch_init_with_country(CYW43_COUNTRY_USA)) {
     printf("failed to initalise\n");
     return 1;
   }
   printf("initalised\n");
+  sleep_ms(2000);
   cyw43_arch_enable_sta_mode();
   printf("station mode enabled\n");
 
@@ -48,31 +48,6 @@ int main(void) {
   } else {
     provision_mode = 0;
   }
-  static dhcpserver_t dhcp_server;
-  // ...
-  dhcpserver_init(&dhcp_server);
-  printf("DHCP server started.\n");
-
-  // --- ALSO START THE TCP SERVER HERE ---
-  printf("Starting configuration TCP server...\n");
-  struct tcp_pcb *pcb = tcp_new_ip_type(IPADDR_TYPE_ANY);
-  if (!pcb) {
-    return;
-  }                                           // Handle error
-  err_t err = tcp_bind(pcb, IP_ANY_TYPE, 80); // Bind to port 80 for HTTP
-  if (err != ERR_OK) {
-    tcp_close(pcb);
-    return;
-  }
-  struct tcp_pcb *listening_pcb = tcp_listen(pcb);
-  if (!listening_pcb) {
-    tcp_close(pcb);
-    return;
-  }
-  tcp_accept(listening_pcb, tcp_server_accept_callback);
-
-  printf("Pico W is in configuration mode. Connect to the '%s' network.\n",
-         AP_SSID);
   printf("connected\n");
   struct tcp_pcb *pcb;
   pcb = tcp_new_ip_type(IPADDR_TYPE_ANY);

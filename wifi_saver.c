@@ -5,6 +5,7 @@
 #include "lwip/netif.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
+#include <stdio.h>
 
 // --- AP Mode Configuration ---
 #define AP_SSID "PicoW_AP"
@@ -17,11 +18,10 @@
 #define AP_NETMASK "255.255.255.0"
 #define AP_GATEWAY "192.168.4.1" // Often the same as the AP's IP
 
-#include <stdio.h>
-
 void collect_wifi() {
 
   printf("Enabling AP mode...\n");
+  cyw43_arch_disable_sta_mode();
   cyw43_arch_enable_ap_mode(AP_SSID, AP_PASSWORD, AP_AUTH);
   printf("AP mode enabled. SSID: %s\n", AP_SSID);
 
