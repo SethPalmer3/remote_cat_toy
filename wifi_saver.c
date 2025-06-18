@@ -1,4 +1,6 @@
 #include "wifi_saver.h"
+#include "callbacks.h"
+#include "dhcpserver.h"
 #include "lwip/ip4_addr.h"
 #include "lwip/netif.h"
 #include "pico/cyw43_arch.h"
@@ -20,7 +22,6 @@
 void collect_wifi() {
 
   printf("Enabling AP mode...\n");
-  cyw43_arch_disable_sta_mode();
   cyw43_arch_enable_ap_mode(AP_SSID, AP_PASSWORD, AP_AUTH);
   printf("AP mode enabled. SSID: %s\n", AP_SSID);
 
@@ -35,22 +36,30 @@ void collect_wifi() {
   netif_set_addr(netif, &ipaddr, &netmask, &gw);
   printf("Pico W Static IP -> Addr: %s, Mask: %s, Gateway: %s\n", AP_IP,
          AP_NETMASK, AP_GATEWAY);
-  //
-  // // --- Initialize and Start the DHCP Server ---
-  // printf("Starting DHCP server...\n");
-  dhcpserver_init(&dhcp_server);
-  // printf("DHCP server started.\n");
-  //
-  // printf("Pico W is now an Access Point. Connect to it!\n");
-  //
-  // // The main loop can be used for other tasks.
-  // // LwIP and the DHCP server run in the background.
+  static dhcp_server_t dhcp_server;
+  dhcp_server_init(&dhcp_server, &ipaddr, &netmask);
+  printf("DHCP server started.\n");
+
+  // --- ALSO START THE TCP SERVER HERE ---
+  printf("Starting configuration TCP server...\n");
+  struct tcp_pcb *pcb = tcp_new_ip_type(IPADDR_TYPE_ANY);
+  if (!pcb) {
+    return;
+  } // Handle error
+  err_t err = tcp_bind(pcb, IP_ANY_TYPE, 80); // Bind to port 80 for HTTP
+  if (err != ERR_OK) {
+    tcp_close(pcb);
+    return;
+  }
+  struct tcp_pcb *listening_pcb = tcp_listen(pcb);
+  if (!listening_pcb) {
+    tcp_close(pcb);
+    return;
+  }
+  tcp_accept(listening_pcb, tcp_server_accept_callback);
+
+  printf("Pico W is in configuration mode. Connect to the '%s' network.\n",
+         AP_SSID);
   while (1) {
-    // Your application logic can go here.
-    // For example, toggle the onboard LED.
-    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
-    sleep_ms(500);
-    cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 0);
-    sleep_ms(500);
   }
 }

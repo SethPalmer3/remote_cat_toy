@@ -12,6 +12,7 @@ add_executable(remote_cat_toy
 	callbacks.c
 	storage.c
 	wifi_saver.c
+	dhcpserver.c
 	main.c
 )
 
