@@ -14,27 +14,32 @@
 
 #define TCP_SERVER_PORT 80
 
-#define MAX_TRIES 5
+#define MAX_TRIES 1
 
 int provision_mode = 0;
 
 int main(void) {
   stdio_init_all();
+  while (!stdio_usb_connected()) {
+    sleep_ms(100);
+  }
   if (cyw43_arch_init_with_country(CYW43_COUNTRY_USA)) {
     printf("failed to initalise\n");
     return 1;
   }
   printf("initalised\n");
-  sleep_ms(2000);
   cyw43_arch_enable_sta_mode();
   printf("station mode enabled\n");
 
   int tries = 0;
   char ssid[SSID_MAX_LEN];
   char pass[MAX_PASS_LEN];
+  // memcpy(ssid, "MOTOA060h", strlen("MOTOA060h"));
+  // memcpy(pass, "808n7ne2u3", strlen("808n7ne2u3"));
+
   memcpy(ssid, read_ssid(), SSID_MAX_LEN);
   memcpy(pass, read_password(), MAX_PASS_LEN);
-  printf("Trying to connect to %s, with %s\n", ssid, pass);
+  printf("Trying to connect to \'%s\', with \'%s\'\n", ssid, pass);
   while (cyw43_arch_wifi_connect_timeout_ms(ssid, pass, CYW43_AUTH_WPA2_AES_PSK,
                                             10000) &&
          tries < MAX_TRIES) {
