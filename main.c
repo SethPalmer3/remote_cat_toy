@@ -20,9 +20,10 @@ int provision_mode = 0;
 
 int main(void) {
   stdio_init_all();
-  while (!stdio_usb_connected()) {
-    sleep_ms(100);
-  }
+
+  // while (!stdio_usb_connected()) {
+  //   sleep_ms(100);
+  // }
   if (cyw43_arch_init_with_country(CYW43_COUNTRY_USA)) {
     printf("failed to initalise\n");
     return 1;

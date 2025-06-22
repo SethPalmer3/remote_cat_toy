@@ -3,20 +3,33 @@
 #include "hardware/watchdog.h"
 #include "pico/stdlib.h"
 #include "storage.h"
+#include "wheel_controller.h"
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define SIMPLE_CALLBACK "Hello\0"
-#define GEN_ACTION(x) "GET /button?action=" #x
 
-char http_headers[512];
-// Wifi input html
-char *WIFI_PROVISIONING_HTML =
+// --- Constants ---
+#define ACTION_PREFIX "GET /button?action="
+#define ACTIVATE_TIME 200
+#define LEFT_FORWARD 2
+#define LEFT_BACKWARD 3
+#define RIGHT_FORWARD 12
+#define RIGHT_BACKWARD 13
+
+// --- HTTP Content ---
+
+// Use 'static const' for read-only string data.
+static const char *HTTP_HEADER_200_OK = "HTTP/1.1 200 OK\r\n";
+static const char *HTTP_HEADER_CONTENT_HTML = "Content-Type: text/html\r\n";
+static const char *HTTP_HEADER_CONNECTION_CLOSE = "Connection: close\r\n";
+
+static const char *WIFI_PROVISIONING_HTML =
     "<!DOCTYPE html>"
     "<html>"
     "<head><title>Pico W Wi-Fi Setup</title></head>"
     "<body>"
-    "<h1>Wi-Fi Setup for Your Device</h1>"
+    "<h1>Wi-Fi Setup</h1>"
     "<p>Please enter the credentials for your Wi-Fi network.</p>"
     "<form action=\"/save\" method=\"post\">"
     "<label for=\"ssid\">SSID:</label><br>"
@@ -27,252 +40,284 @@ char *WIFI_PROVISIONING_HTML =
     "</form>"
     "</body>"
     "</html>";
-// The C string for the HTTP response
-char *controller_html =
+
+static const char *CONTROLLER_HTML =
     "<!DOCTYPE html>"
     "<html>"
     "<head>"
-    "<title>Directional Buttons</title>"
+    "<title>Pico W Controller</title>"
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+    "<style>"
+    "body { font-family: Arial, sans-serif; text-align: center; margin-top: "
+    "50px; user-select: none; }"
+    "button { width: 100px; height: 100px; margin: 10px; font-size: 20px; "
+    "border-radius: 10px; }"
+    "#middle-row { display: flex; justify-content: center; align-items: "
+    "center; }"
+    "#buttonLeft { margin-right: 80px; }"
+    "</style>"
     "<script>"
     "let actionIntervalId = null;"
-    "const actionRate = 200;"
-    "function sendButtonPress(direction) {"
-    "fetch('/button?action=' + direction)"
-    ".then(response => {"
-    "if (!response.ok) {"
-    "console.error('Action request failed with status: ' + response.status);"
-    "}"
-    "})"
-    ".catch(error => {"
-    "console.error('Error sending action request:', error);"
-    "});"
+    "const ACTION_RATE_MS = 200;"
+    ""
+    "function sendAction(action) {"
+    "  fetch('/button?action=' + action).catch(e => console.error('Request "
+    "failed:', e));"
     "}"
     ""
-    "function startAction(direction) {"
-    "if (actionIntervalId !== null) {"
-    "return;"
+    "function startAction(action) {"
+    "  if (actionIntervalId !== null) return;"
+    "  sendAction(action);"
+    "  actionIntervalId = setInterval(() => sendAction(action), "
+    "ACTION_RATE_MS);"
     "}"
-    "sendButtonPress(direction);"
-    "console.log('Action started: ' + direction);"
-    "actionIntervalId = setInterval(() => {"
-    "sendButtonPress(direction);"
-    "}, actionRate);"
-    "}"
+    ""
     "function stopAction() {"
-    "if (actionIntervalId === null) {"
-    "return;"
+    "  if (actionIntervalId === null) return;"
+    "  clearInterval(actionIntervalId);"
+    "  actionIntervalId = null;"
     "}"
-    "clearInterval(actionIntervalId);"
-    "actionIntervalId = null;"
-    "console.log('Action stopped.');"
-    "}"
+    // Add event listeners that work for both mouse and touch
+    "document.addEventListener('DOMContentLoaded', () => {"
+    "  const buttons = {"
+    "    'buttonUp': 'up',"
+    "    'buttonDown': 'down',"
+    "    'buttonLeft': 'left',"
+    "    'buttonRight': 'right',"
+    "  };"
+    "  for (const [id, action] of Object.entries(buttons)) {"
+    "    const button = document.getElementById(id);"
+    "    button.addEventListener('mousedown', () => startAction(action));"
+    "    button.addEventListener('touchstart', (e) => { e.preventDefault(); "
+    "startAction(action); });"
+    "    button.addEventListener('mouseup', stopAction);"
+    "    button.addEventListener('mouseleave', stopAction);"
+    "    button.addEventListener('touchend', stopAction);"
+    "  }"
+    "});"
     "</script>"
     "</head>"
     "<body>"
-    "<center>"
-    "<p>"
-    "<button type=\"button\" id=\"buttonUp\" "
-    "onmousedown=\"startAction(\'up\')\" "
-    "onmouseup=\"stopAction()\" "
-    "onmouseleave=\"stopAction()\">Up</button>"
-    "</p>"
-    "<p>"
-    "<button type=\"button\" id=\"buttonLeft\" style=\"margin-right: 40px;\" "
-    "onmousedown=\"startAction(\'left\')\" "
-    "onmouseup=\"stopAction()\" "
-    "onmouseleave=\"stopAction()\">Left</button>"
-    "<button type=\"button\" id=\"buttonRight\" style=\"margin-left: 40px;\" "
-    "onmousedown=\"startAction(\'right\')\" "
-    "onmouseup=\"stopAction()\" "
-    "onmouseleave=\"stopAction()\">Right</button>"
-    "</p>"
-    "<p>"
-    "<button type=\"button\" id=\"buttonDown\" "
-    "onmousedown=\"startAction(\'down\')\" "
-    "onmouseup=\"stopAction()\" "
-    "onmouseleave=\"stopAction()\">Down</button>"
-    "</p>"
-    "</center>"
+    "<h1>Controller</h1>"
+    "<div><button id=\"buttonUp\">Up</button></div>"
+    "<div id=\"middle-row\">"
+    "<button id=\"buttonLeft\">Left</button>"
+    "<button id=\"buttonRight\">Right</button>"
+    "</div>"
+    "<div><button id=\"buttonDown\">Down</button></div>"
     "</body>"
     "</html>";
-// Calculate the total length of this string for sending
-// strlen(http_response) would give you this.
 
-char *url_decode_in_place(char *str) {
-  // This is a simple in-place url-decode function.
-  // A more robust version would handle more cases.
-  char *a = str;
-  char *b = str;
-  while (*a) {
-    if (*a == '%' && isxdigit((unsigned char)*(a + 1)) &&
-        isxdigit((unsigned char)*(a + 2))) {
-      char hex[3] = {*(a + 1), *(a + 2), 0};
-      *b++ = strtol(hex, NULL, 16);
-      a += 3;
-    } else if (*a == '+') {
-      *b++ = ' ';
-      a++;
+// --- Utility Functions ---
+
+/**
+ * @brief In-place URL-decodes a string.
+ * @param str The string to decode.
+ */
+static void url_decode_in_place(char *str) {
+  char *write_ptr = str;
+  while (*str) {
+    if (*str == '%' && isxdigit((unsigned char)*(str + 1)) &&
+        isxdigit((unsigned char)*(str + 2))) {
+      char hex[3] = {*(str + 1), *(str + 2), '\0'};
+      *write_ptr++ = strtol(hex, NULL, 16);
+      str += 3;
+    } else if (*str == '+') {
+      *write_ptr++ = ' ';
+      str++;
     } else {
-      *b++ = *a++;
+      *write_ptr++ = *str++;
     }
   }
-  *b = '\0';
-  return str;
+  *write_ptr = '\0';
 }
 
-void handle_action(struct pbuf *p) {
-  printf("%.*s\n", p->tot_len, p->payload);
-  printf("testing [%.*s] against [%s]\n\n", p->payload, strlen(GEN_ACTION(up)),
-         GEN_ACTION(up));
-  // Checking if the request was a action
-  if (strncmp(p->payload, GEN_ACTION(up), strlen(GEN_ACTION(up))) == 0) {
-    // Move forward
-    printf("[Action]Moving forward\n");
-  } else if (strncmp(p->payload, GEN_ACTION(down), strlen(GEN_ACTION(down))) ==
-             0) {
-    // Move forward
-    printf("[Action]Moving back\n");
-  } else if (strncmp(p->payload, GEN_ACTION(left), strlen(GEN_ACTION(left))) ==
-             0) {
-    // Move forward
-    printf("[Action]Moving left\n");
-  } else if (strncmp(p->payload, GEN_ACTION(right),
-                     strlen(GEN_ACTION(right))) == 0) {
-    // Move forward
-    printf("[Action]Moving right\n");
+// --- HTTP Response Functions ---
+
+/**
+ * @brief Sends a simple HTTP response with only headers (e.g., 200 OK).
+ */
+static err_t send_simple_response(struct tcp_pcb *tpcb, const char *status) {
+  err_t err = tcp_write(tpcb, status, strlen(status), TCP_WRITE_FLAG_COPY);
+  if (err != ERR_OK)
+    return err;
+  return tcp_write(tpcb, HTTP_HEADER_CONNECTION_CLOSE,
+                   strlen(HTTP_HEADER_CONNECTION_CLOSE), TCP_WRITE_FLAG_COPY);
+}
+
+/**
+ * @brief Constructs and sends a full HTTP response with a body.
+ */
+static err_t send_full_response(struct tcp_pcb *tpcb, const char *body) {
+  char headers[128];
+  snprintf(headers, sizeof(headers), "%s%sContent-Length: %d\r\n%s\r\n",
+           HTTP_HEADER_200_OK, HTTP_HEADER_CONTENT_HTML, strlen(body),
+           HTTP_HEADER_CONNECTION_CLOSE);
+
+  err_t err = tcp_write(tpcb, headers, strlen(headers), TCP_WRITE_FLAG_COPY);
+  if (err != ERR_OK) {
+    printf("Failed to write HTTP headers. Error: %d\n", err);
+    return err;
+  }
+
+  err = tcp_write(tpcb, body, strlen(body), TCP_WRITE_FLAG_COPY);
+  if (err != ERR_OK) {
+    printf("Failed to write HTTP body. Error: %d\n", err);
+  }
+  return err;
+}
+
+// --- Logic Handlers ---
+
+/**
+ * @brief Handles the directional commands from the controller page.
+ */
+static void handle_action(const char *payload) {
+  if (strncmp(payload, ACTION_PREFIX "up", strlen(ACTION_PREFIX "up")) == 0) {
+    printf("[Action] Moving forward\n");
+    move(1, LEFT_FORWARD, LEFT_BACKWARD);
+    move(1, RIGHT_FORWARD, RIGHT_BACKWARD);
+    sleep_ms(ACTIVATE_TIME);
+    move(0, LEFT_FORWARD, LEFT_BACKWARD);
+    move(0, RIGHT_FORWARD, RIGHT_BACKWARD);
+  } else if (strncmp(payload, ACTION_PREFIX "down",
+                     strlen(ACTION_PREFIX "down")) == 0) {
+    printf("[Action] Moving back\n");
+    move(-1, LEFT_FORWARD, LEFT_BACKWARD);
+    move(-1, RIGHT_FORWARD, RIGHT_BACKWARD);
+    sleep_ms(ACTIVATE_TIME);
+    move(0, LEFT_FORWARD, LEFT_BACKWARD);
+    move(0, RIGHT_FORWARD, RIGHT_BACKWARD);
+  } else if (strncmp(payload, ACTION_PREFIX "left",
+                     strlen(ACTION_PREFIX "left")) == 0) {
+    printf("[Action] Moving left\n");
+    move(-1, LEFT_FORWARD, LEFT_BACKWARD);
+    move(1, RIGHT_FORWARD, RIGHT_BACKWARD);
+    sleep_ms(ACTIVATE_TIME);
+    move(0, LEFT_FORWARD, LEFT_BACKWARD);
+    move(0, RIGHT_FORWARD, RIGHT_BACKWARD);
+  } else if (strncmp(payload, ACTION_PREFIX "right",
+                     strlen(ACTION_PREFIX "right")) == 0) {
+    printf("[Action] Moving right\n");
+    move(1, LEFT_FORWARD, LEFT_BACKWARD);
+    move(-1, RIGHT_FORWARD, RIGHT_BACKWARD);
+    sleep_ms(ACTIVATE_TIME);
+    move(0, LEFT_FORWARD, LEFT_BACKWARD);
+    move(0, RIGHT_FORWARD, RIGHT_BACKWARD);
+  } else {
+    printf("[Action] Unknown action %s", payload);
   }
 }
 
-char *http_response_content(char *html_body) {
-  int body_len = strlen(html_body);
-
-  (void)sprintf(http_headers,
-                "HTTP/1.1 200 OK\r\n"
-                "Content-Type: text/html\r\n"
-                "Content-Length: %d\r\n" // Length of the body
-                "Connection: close\r\n"  // Tell client to close connection
-                "\r\n",                  // End of headers
-                body_len);
-  char *http_response =
-      (char *)malloc(sizeof(char) * (strlen(http_headers) + body_len));
-  printf("length of http response: %d\n", (int)strlen(http_headers) + body_len);
-  strcpy(http_response, http_headers);
-  strcpy(http_response + strlen(http_headers), html_body);
-  return http_response;
-}
-
-err_t tcp_server_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
-                               err_t err) {
-  if (p == NULL) {
-    return tcp_close(tpcb);
-  }
-  tcp_recved(tpcb, p->tot_len);
-
-  char *request = (char *)p->payload;
-
-  if (!provision_mode) {
-    if (err == ERR_OK) {
-      tcp_recved(tpcb, p->tot_len);
-      printf(" -- received %u bytes: \n", p->tot_len);
-
-      // Responding
-      // Dynamically adding the length of the body
-      char *http_response = http_response_content(controller_html);
-      if (tcp_write(tpcb, http_response, strlen(http_response),
-                    TCP_WRITE_FLAG_COPY)) {
-        printf("Failed to respond\n");
-      } else {
-        tcp_output(tpcb);
-      }
-      free(http_response);
-      pbuf_free(p);
-      return tcp_close(tpcb);
-    } else {
-      printf("recieve error: %d\n", err);
-      pbuf_free(p);
-      return ERR_OK;
-    }
-  }
-  // Handle GET / request - serve the configuration page
-  else if (strncmp(request, "GET / ", strlen("GET / ")) == 0) {
+/**
+ * @brief Handles incoming requests when the device is in provisioning mode.
+ */
+static err_t handle_provisioning_request(struct tcp_pcb *tpcb,
+                                         const char *request, uint16_t len) {
+  // Serve the Wi-Fi setup page on GET /
+  if (strncmp(request, "GET / ", 6) == 0) {
     printf("Serving Wi-Fi configuration page.\n");
-    // Construct and send the HTTP response with the form
-    char http_header[256];
-    sprintf(http_header,
-            "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: "
-            "close\r\nContent-Type: text/html\r\n\r\n",
-            strlen(WIFI_PROVISIONING_HTML));
-    tcp_write(tpcb, http_header, strlen(http_header), TCP_WRITE_FLAG_COPY);
-    tcp_write(tpcb, WIFI_PROVISIONING_HTML, strlen(WIFI_PROVISIONING_HTML),
-              TCP_WRITE_FLAG_COPY);
-    tcp_output(tpcb);
+    return send_full_response(tpcb, WIFI_PROVISIONING_HTML);
   }
-  // Handle POST /save request - save credentials
-  else if (strncmp(request, "POST /save ", strlen("POST /save ")) == 0) {
-    printf("Received POST request to save credentials.\n");
-    // Find the start of the body data (after the \r\n\r\n)
-    char *body = strstr(request, "\r\n\r\n");
+  // Handle saving credentials on POST /save
+  else if (strncmp(request, "POST /save ", 11) == 0) {
+    printf("Received POST to save credentials.\n");
+    const char *body = strstr(request, "\r\n\r\n");
     if (body) {
-      body += 4; // Move pointer past the \r\n\r\n
+      body += 4; // Skip headers
 
-      // Simple parsing for ssid=...&pass=...
-      char *ssid_ptr = strstr(body, "ssid=");
-      char *pass_ptr = strstr(body, "pass=");
+      char *ssid = strstr(body, "ssid=");
+      char *pass = strstr(body, "pass=");
 
-      if (ssid_ptr && pass_ptr) {
-        ssid_ptr += 5; // Move past "ssid="
-        pass_ptr += 5; // Move past "pass="
+      if (ssid && pass) {
+        ssid += 5; // Move past "ssid="
+        pass += 5; // Move past "pass="
 
-        // Terminate the SSID string at the '&'
-        char *ampersand = strchr(ssid_ptr, '&');
+        char *ampersand = strchr(ssid, '&');
         if (ampersand)
           *ampersand = '\0';
 
-        // URL-decode the values in place
-        url_decode_in_place(ssid_ptr);
-        url_decode_in_place(pass_ptr);
+        url_decode_in_place(ssid);
+        url_decode_in_place(pass);
 
-        printf("Parsed SSID: '%s'\n", ssid_ptr);
-        printf("Parsed Password: '%s'\n", pass_ptr);
+        printf("Parsed SSID: '%s'\n", ssid);
+        printf("Parsed Password: '%s'\n", pass);
 
-        // Use your existing storage functions
-        store_ssid(ssid_ptr);
-        store_password(pass_ptr);
+        store_ssid(ssid);
+        store_password(pass);
 
-        // Send a success response and reboot
-        const char *success_response =
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
-            "<html><body><h1>Credentials Saved!</h1><p>The device will now "
-            "reboot and connect to the new network.</p></body></html>";
-        tcp_write(tpcb, success_response, strlen(success_response),
-                  TCP_WRITE_FLAG_COPY);
+        const char *success_msg =
+            "<h1>Credentials Saved!</h1><p>Device will now reboot.</p>";
+        send_full_response(tpcb, success_msg);
         tcp_output(tpcb);
-        sleep_ms(100); // Give time for the response to be sent
 
-        printf("Rebooting in 2 seconds...\n");
         sleep_ms(2000);
         watchdog_reboot(0, 0, 0);
       }
     }
+  }
+  return ERR_OK;
+}
+
+/**
+ * @brief Handles incoming requests when the device is in normal controller
+ * mode.
+ */
+static err_t handle_controller_request(struct tcp_pcb *tpcb,
+                                       const char *request, uint16_t len) {
+  // Check if it's a button action
+  if (strncmp(request, ACTION_PREFIX, strlen(ACTION_PREFIX)) == 0) {
+    handle_action(request);
+    return send_simple_response(tpcb, HTTP_HEADER_200_OK);
+  }
+  // Otherwise, serve the main controller page
+  else if (strncmp(request, "GET / ", 6) == 0) {
+    return send_full_response(tpcb, CONTROLLER_HTML);
+  }
+
+  return ERR_OK;
+}
+
+// --- lwIP Callback Functions ---
+
+err_t tcp_server_recv_callback(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
+                               err_t err) {
+  if (p == NULL) {
+    printf("Connection closed by client.\n");
+    return tcp_close(tpcb);
+  }
+
+  if (err != ERR_OK) {
+    printf("Receive error: %d\n", err);
+    pbuf_free(p);
+    return err;
+  }
+
+  // Acknowledge receipt of the data
+  tcp_recved(tpcb, p->tot_len);
+
+  char *request = (char *)p->payload;
+
+  // Route request based on the device mode
+  if (provision_mode) {
+    handle_provisioning_request(tpcb, request, p->tot_len);
+  } else {
+    handle_controller_request(tpcb, request, p->tot_len);
   }
 
   pbuf_free(p);
   return tcp_close(tpcb);
 }
 
-// Callback function for new connections
 err_t tcp_server_accept_callback(void *arg, struct tcp_pcb *new_pcb,
                                  err_t err) {
-  LWIP_UNUSED_ARG(arg);
-
   if (err != ERR_OK || new_pcb == NULL) {
-    printf("accept callback error: %d\n", err);
+    printf("Accept callback error: %d\n", err);
     return ERR_VAL;
   }
-  printf("client connected!\n");
 
+  printf("Client connected.\n");
   tcp_accepted(new_pcb);
-
   tcp_recv(new_pcb, tcp_server_recv_callback);
 
   return ERR_OK;

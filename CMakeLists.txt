@@ -13,11 +13,12 @@ add_executable(blink
 	picow_blink.c
 )
 add_executable(remote_cat_toy
+	main.c
 	callbacks.c
 	storage.c
 	wifi_saver.c
 	dhcpserver.c
-	main.c
+	wheel_controller.c
 )
 
 pico_enable_stdio_usb(remote_cat_toy 1)
