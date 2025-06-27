@@ -105,6 +105,7 @@ static const char *CONTROLLER_HTML =
     "<button id=\"buttonRight\">Right</button>"
     "</div>"
     "<div><button id=\"buttonDown\">Down</button></div>"
+    "<p>%s</p>"
     "</body>"
     "</html>";
 
@@ -272,7 +273,14 @@ static err_t handle_controller_request(struct tcp_pcb *tpcb,
   }
   // Otherwise, serve the main controller page
   else if (strncmp(request, "GET / ", 6) == 0) {
-    return send_full_response(tpcb, CONTROLLER_HTML);
+    struct netif *netif = netif_default;
+    const ip4_addr_t *ip_addr = netif_ip4_addr(netif);
+    char *modified_cntrl_html =
+        malloc(strlen(CONTROLLER_HTML) + strlen(ip4addr_ntoa(ip_addr)));
+    sprintf(modified_cntrl_html, CONTROLLER_HTML, ip4addr_ntoa(ip_addr));
+    err_t e = send_full_response(tpcb, modified_cntrl_html);
+    free(modified_cntrl_html);
+    return e;
   }
 
   return ERR_OK;
