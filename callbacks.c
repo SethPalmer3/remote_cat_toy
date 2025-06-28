@@ -10,9 +10,20 @@
 #include <stdlib.h>
 #include <string.h>
 
-// --- Volatile Globals
+// --- Enums ---
 
-static volatile bool motor_action_in_progress = false;
+enum Action {
+  UP,
+  DOWN,
+  LEFT,
+  RIGHT,
+  HALT,
+};
+
+// --- Volatile Globals ---
+
+static volatile alarm_id_t last_motor_alarm_id;
+static volatile enum Action last_motor_action_id = HALT;
 
 // --- Constants ---
 #define ACTION_PREFIX "GET /button?action="
@@ -63,28 +74,20 @@ static const char *CONTROLLER_HTML =
     "#buttonLeft { margin-right: 80px; }"
     "</style>"
     "<script>"
-    "let actionIntervalId = null;"
-    "const ACTION_RATE_MS = 200;"
     ""
     "function sendAction(action) {"
-    "const slider_value = document.getElementById('durationSlider').value;"
-    "  fetch('/button?action=' + action + '&duration=' + slider_value).catch(e "
+    "  fetch('/button?action=' + action).catch(e "
     "=> console.error('Request "
     "failed:', e));"
     "}"
     ""
     "function startAction(action) {"
-    "  if (actionIntervalId !== null) return;"
+    // "  if (actionIntervalId !== null) return;"
     "  sendAction(action);"
-    "  actionIntervalId = setInterval(() => sendAction(action), "
-    "ACTION_RATE_MS);"
+    // "  actionIntervalId = setInterval(() => sendAction(action), "
+    // "ACTION_RATE_MS);"
     "}"
     ""
-    "function stopAction() {"
-    "  if (actionIntervalId === null) return;"
-    "  clearInterval(actionIntervalId);"
-    "  actionIntervalId = null;"
-    "}"
     // Add event listeners that work for both mouse and touch
     "document.addEventListener('DOMContentLoaded', () => {"
     "  const slider = document.getElementById('durationSlider');"
@@ -103,21 +106,15 @@ static const char *CONTROLLER_HTML =
     "    button.addEventListener('mousedown', () => startAction(action));"
     "    button.addEventListener('touchstart', (e) => { e.preventDefault(); "
     "startAction(action); });"
-    "    button.addEventListener('mouseup', stopAction);"
-    "    button.addEventListener('mouseleave', stopAction);"
-    "    button.addEventListener('touchend', stopAction);"
+    "    button.addEventListener('mouseup', () => sendAction('halt'));"
+    "    button.addEventListener('mouseleave', () => sendAction('halt'));"
+    "    button.addEventListener('touchend', () => sendAction('halt'));"
     "  }"
     "});"
     "</script>"
     "</head>"
     "<body>"
     "<h1>Controller</h1>"
-    "<div>"
-    "  <label for=\"durationSlider\">Motor On-Time (ms):</label>"
-    "  <input type=\"range\" id=\"durationSlider\" min=\"50\" max=\"1000\" "
-    "value=\"200\" step=\"10\">"
-    "  <span id=\"durationValue\">200</span>"
-    "</div>"
     "<div><button id=\"buttonUp\">Up</button></div>"
     "<div id=\"middle-row\">"
     "<button id=\"buttonLeft\">Left</button>"
@@ -142,7 +139,7 @@ int64_t end_motor_action_callback(alarm_id_t id, void *user_data) {
   move(0, LEFT_FORWARD, LEFT_BACKWARD);
   move(0, RIGHT_FORWARD, RIGHT_BACKWARD);
   // Reset the flag to allow new actions
-  motor_action_in_progress = false;
+  last_motor_action_id = HALT;
   return 0; // Do not repeat the timer
 }
 /**
@@ -204,42 +201,53 @@ static err_t send_full_response(struct tcp_pcb *tpcb, const char *body) {
 
 // --- Logic Handlers ---
 
+static void
+handle_single_action(int left_dir, int right_dir, unsigned int left_forward,
+                     unsigned int left_backward, unsigned int right_forward,
+                     unsigned int right_backward, enum Action action_id) {
+  // if (last_motor_action_id == action_id) {
+  //   cancel_alarm(last_motor_alarm_id);
+  // }
+  move(left_dir, left_forward, left_backward);
+  move(right_dir, right_forward, right_backward);
+  last_motor_alarm_id = action_id;
+}
+
 /**
  * @brief Handles the directional commands from the controller page.
  */
-static void handle_action(const char *payload, int duration_ms) {
-  if (motor_action_in_progress) {
-    printf("[Action] Ignoring action, already in progress\n");
-    return;
-  }
-  if (duration_ms < 20) {
-    duration_ms = 20;
-  }
-  if (duration_ms > 2000) {
-    duration_ms = 2000;
-  }
-  motor_action_in_progress = true;
+static void action_handler(const char *payload) {
+  // if (motor_action_in_progress) {
+  //   printf("[Action] Ignoring action, already in progress\n");
+  //   return;
+  // }
+  printf("--- Request ---\n%s\n----------\n");
   if (strncmp(payload, "up", strlen("up")) == 0) {
-    printf("[Action] Moving forward for %d ms\n", duration_ms);
-    move(1, LEFT_FORWARD, LEFT_BACKWARD);
-    move(1, RIGHT_FORWARD, RIGHT_BACKWARD);
+    printf("[Action] Moving forward \n");
+    handle_single_action(1, 1, LEFT_FORWARD, LEFT_BACKWARD, RIGHT_FORWARD,
+                         RIGHT_BACKWARD, UP);
   } else if (strncmp(payload, "down", strlen("down")) == 0) {
-    printf("[Action] Moving backward for %d ms\n", duration_ms);
-    move(-1, LEFT_FORWARD, LEFT_BACKWARD);
-    move(-1, RIGHT_FORWARD, RIGHT_BACKWARD);
+    printf("[Action] Moving backward\n");
+    handle_single_action(-1, -1, LEFT_FORWARD, LEFT_BACKWARD, RIGHT_FORWARD,
+                         RIGHT_BACKWARD, DOWN);
   } else if (strncmp(payload, "left", strlen("left")) == 0) {
-    printf("[Action] Moving left for %d ms\n", duration_ms);
-    move(-1, LEFT_FORWARD, LEFT_BACKWARD);
-    move(1, RIGHT_FORWARD, RIGHT_BACKWARD);
+    printf("[Action] Moving left\n");
+    handle_single_action(-1, 1, LEFT_FORWARD, LEFT_BACKWARD, RIGHT_FORWARD,
+                         RIGHT_BACKWARD, LEFT);
   } else if (strncmp(payload, "right", strlen("right")) == 0) {
-    printf("[Action] Moving right for %d ms\n", duration_ms);
-    move(1, LEFT_FORWARD, LEFT_BACKWARD);
-    move(-1, RIGHT_FORWARD, RIGHT_BACKWARD);
+    printf("[Action] Moving right\n");
+    handle_single_action(1, -1, LEFT_FORWARD, LEFT_BACKWARD, RIGHT_FORWARD,
+                         RIGHT_BACKWARD, RIGHT);
+  } else if (strncmp(payload, "halt", strlen("halt")) == 0) {
+    printf("[Action] Stopping\n");
+    handle_single_action(0, 0, LEFT_FORWARD, LEFT_BACKWARD, RIGHT_FORWARD,
+                         RIGHT_BACKWARD, HALT);
   } else {
     printf("[Action] Unknown action (%s)", payload);
-    motor_action_in_progress = 0;
+    return;
   }
-  add_alarm_in_ms(duration_ms, end_motor_action_callback, NULL, false);
+  // last_motor_alarm_id =
+  //     add_alarm_in_ms(duration_ms, end_motor_action_callback, NULL, false);
 }
 
 /**
@@ -326,16 +334,9 @@ static err_t handle_controller_request(struct tcp_pcb *tpcb,
         action_str[action_len] = '\0'; // Ensure it's null-terminated
 
         // Find the duration parameter, default to 200ms
-        int duration = 200;
-        const char *duration_start = strstr(request, "duration=");
-        // printf("found duration: %s\n", duration_start);
-        if (duration_start) {
-          duration_start += 9; // Move pointer past "duration="
-          duration = atoi(duration_start);
-        }
 
         // Call the handle_action function
-        handle_action(action_str, duration);
+        action_handler(action_str);
       }
     }
 
