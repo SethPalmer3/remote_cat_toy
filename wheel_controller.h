@@ -23,3 +23,5 @@ typedef struct mv_hndlr {
  * @brief reverse_pin the pin to set high to go backward
  */
 void move(int direction, uint forward_pin, uint reverse_pin);
+
+void wheel_init(uint forward_pin, uint backward_pin);

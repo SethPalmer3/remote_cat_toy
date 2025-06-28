@@ -9,12 +9,17 @@
 
 #include "callbacks.h"
 #include "storage.h"
+#include "wheel_controller.h"
 #include "wifi_saver.h"
 // #include "storage.h"
 
 #define TCP_SERVER_PORT 80
 
-#define MAX_TRIES 1
+#define MAX_TRIES 3
+#define LEFT_FORWARD 2
+#define LEFT_BACKWARD 3
+#define RIGHT_FORWARD 12
+#define RIGHT_BACKWARD 13
 
 int provision_mode = 0;
 
@@ -55,6 +60,10 @@ int main(void) {
     provision_mode = 0;
   }
   printf("connected\n");
+  printf("setting up wheel pins\n");
+  wheel_init(LEFT_FORWARD, LEFT_BACKWARD);
+  wheel_init(RIGHT_FORWARD, RIGHT_BACKWARD);
+
   struct tcp_pcb *pcb;
   pcb = tcp_new_ip_type(IPADDR_TYPE_ANY);
   if (!pcb) {
@@ -88,7 +97,8 @@ int main(void) {
   printf("accept callback registered. server is ready\n");
 
   while (1) {
-    sleep_ms(1000);
+    sleep_ms(10);
+    cyw43_arch_poll();
   }
   return EXIT_SUCCESS;
 }

@@ -1,5 +1,6 @@
 #include "callbacks.h"
 #include "hardware/sync.h"
+#include "hardware/timer.h"
 #include "hardware/watchdog.h"
 #include "pico/stdlib.h"
 #include "storage.h"
@@ -9,6 +10,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+// --- Volatile Globals
+
+static volatile bool motor_action_in_progress = false;
+
 // --- Constants ---
 #define ACTION_PREFIX "GET /button?action="
 #define ACTIVATE_TIME 200
@@ -16,6 +21,7 @@
 #define LEFT_BACKWARD 3
 #define RIGHT_FORWARD 12
 #define RIGHT_BACKWARD 13
+#define DEBUG 0
 
 // --- HTTP Content ---
 
@@ -61,7 +67,9 @@ static const char *CONTROLLER_HTML =
     "const ACTION_RATE_MS = 200;"
     ""
     "function sendAction(action) {"
-    "  fetch('/button?action=' + action).catch(e => console.error('Request "
+    "const slider_value = document.getElementById('durationSlider').value;"
+    "  fetch('/button?action=' + action + '&duration=' + slider_value).catch(e "
+    "=> console.error('Request "
     "failed:', e));"
     "}"
     ""
@@ -79,6 +87,11 @@ static const char *CONTROLLER_HTML =
     "}"
     // Add event listeners that work for both mouse and touch
     "document.addEventListener('DOMContentLoaded', () => {"
+    "  const slider = document.getElementById('durationSlider');"
+    "  const display = document.getElementById('durationValue');"
+    "  slider.addEventListener('input', () => {"
+    "    display.textContent = slider.value;"
+    "  });"
     "  const buttons = {"
     "    'buttonUp': 'up',"
     "    'buttonDown': 'down',"
@@ -99,6 +112,12 @@ static const char *CONTROLLER_HTML =
     "</head>"
     "<body>"
     "<h1>Controller</h1>"
+    "<div>"
+    "  <label for=\"durationSlider\">Motor On-Time (ms):</label>"
+    "  <input type=\"range\" id=\"durationSlider\" min=\"50\" max=\"1000\" "
+    "value=\"200\" step=\"10\">"
+    "  <span id=\"durationValue\">200</span>"
+    "</div>"
     "<div><button id=\"buttonUp\">Up</button></div>"
     "<div id=\"middle-row\">"
     "<button id=\"buttonLeft\">Left</button>"
@@ -110,7 +129,22 @@ static const char *CONTROLLER_HTML =
     "</html>";
 
 // --- Utility Functions ---
-
+/**
+ * @brief This function is called by the hardware timer alarm to turn the motors
+ * off.
+ * @param id The ID of the alarm that triggered.
+ * @param user_data User data passed to the alarm (not used here).
+ * @return int64_t 0 to prevent the timer from repeating.
+ */
+int64_t end_motor_action_callback(alarm_id_t id, void *user_data) {
+  printf("[Timer] Turning motors off.\n");
+  // Stop all motors
+  move(0, LEFT_FORWARD, LEFT_BACKWARD);
+  move(0, RIGHT_FORWARD, RIGHT_BACKWARD);
+  // Reset the flag to allow new actions
+  motor_action_in_progress = false;
+  return 0; // Do not repeat the timer
+}
 /**
  * @brief In-place URL-decodes a string.
  * @param str The string to decode.
@@ -173,41 +207,39 @@ static err_t send_full_response(struct tcp_pcb *tpcb, const char *body) {
 /**
  * @brief Handles the directional commands from the controller page.
  */
-static void handle_action(const char *payload) {
-  if (strncmp(payload, ACTION_PREFIX "up", strlen(ACTION_PREFIX "up")) == 0) {
-    printf("[Action] Moving forward\n");
-    move(1, LEFT_FORWARD, LEFT_BACKWARD);
-    move(1, RIGHT_FORWARD, RIGHT_BACKWARD);
-    sleep_ms(ACTIVATE_TIME);
-    move(0, LEFT_FORWARD, LEFT_BACKWARD);
-    move(0, RIGHT_FORWARD, RIGHT_BACKWARD);
-  } else if (strncmp(payload, ACTION_PREFIX "down",
-                     strlen(ACTION_PREFIX "down")) == 0) {
-    printf("[Action] Moving back\n");
-    move(-1, LEFT_FORWARD, LEFT_BACKWARD);
-    move(-1, RIGHT_FORWARD, RIGHT_BACKWARD);
-    sleep_ms(ACTIVATE_TIME);
-    move(0, LEFT_FORWARD, LEFT_BACKWARD);
-    move(0, RIGHT_FORWARD, RIGHT_BACKWARD);
-  } else if (strncmp(payload, ACTION_PREFIX "left",
-                     strlen(ACTION_PREFIX "left")) == 0) {
-    printf("[Action] Moving left\n");
-    move(-1, LEFT_FORWARD, LEFT_BACKWARD);
-    move(1, RIGHT_FORWARD, RIGHT_BACKWARD);
-    sleep_ms(ACTIVATE_TIME);
-    move(0, LEFT_FORWARD, LEFT_BACKWARD);
-    move(0, RIGHT_FORWARD, RIGHT_BACKWARD);
-  } else if (strncmp(payload, ACTION_PREFIX "right",
-                     strlen(ACTION_PREFIX "right")) == 0) {
-    printf("[Action] Moving right\n");
-    move(1, LEFT_FORWARD, LEFT_BACKWARD);
-    move(-1, RIGHT_FORWARD, RIGHT_BACKWARD);
-    sleep_ms(ACTIVATE_TIME);
-    move(0, LEFT_FORWARD, LEFT_BACKWARD);
-    move(0, RIGHT_FORWARD, RIGHT_BACKWARD);
-  } else {
-    printf("[Action] Unknown action %s", payload);
+static void handle_action(const char *payload, int duration_ms) {
+  if (motor_action_in_progress) {
+    printf("[Action] Ignoring action, already in progress\n");
+    return;
   }
+  if (duration_ms < 20) {
+    duration_ms = 20;
+  }
+  if (duration_ms > 2000) {
+    duration_ms = 2000;
+  }
+  motor_action_in_progress = true;
+  if (strncmp(payload, "up", strlen("up")) == 0) {
+    printf("[Action] Moving forward for %d ms\n", duration_ms);
+    move(1, LEFT_FORWARD, LEFT_BACKWARD);
+    move(1, RIGHT_FORWARD, RIGHT_BACKWARD);
+  } else if (strncmp(payload, "down", strlen("down")) == 0) {
+    printf("[Action] Moving backward for %d ms\n", duration_ms);
+    move(-1, LEFT_FORWARD, LEFT_BACKWARD);
+    move(-1, RIGHT_FORWARD, RIGHT_BACKWARD);
+  } else if (strncmp(payload, "left", strlen("left")) == 0) {
+    printf("[Action] Moving left for %d ms\n", duration_ms);
+    move(-1, LEFT_FORWARD, LEFT_BACKWARD);
+    move(1, RIGHT_FORWARD, RIGHT_BACKWARD);
+  } else if (strncmp(payload, "right", strlen("right")) == 0) {
+    printf("[Action] Moving right for %d ms\n", duration_ms);
+    move(1, LEFT_FORWARD, LEFT_BACKWARD);
+    move(-1, RIGHT_FORWARD, RIGHT_BACKWARD);
+  } else {
+    printf("[Action] Unknown action (%s)", payload);
+    motor_action_in_progress = 0;
+  }
+  add_alarm_in_ms(duration_ms, end_motor_action_callback, NULL, false);
 }
 
 /**
@@ -267,10 +299,49 @@ static err_t handle_provisioning_request(struct tcp_pcb *tpcb,
 static err_t handle_controller_request(struct tcp_pcb *tpcb,
                                        const char *request, uint16_t len) {
   // Check if it's a button action
-  if (strncmp(request, ACTION_PREFIX, strlen(ACTION_PREFIX)) == 0) {
-    handle_action(request);
+
+  if (DEBUG) {
+
+    printf(" --- Request ---\n%s\n --- End Request ---\n", request);
+  }
+  if (strncmp(request, "GET /button?", 12) == 0) {
+
+    // Find the action parameter
+    const char *action_start = strstr(request, "action=");
+    if (action_start) {
+      action_start += 7; // Move pointer past "action="
+
+      // Find the end of the action value (it will be followed by a space)
+      const char *action_end = action_start;
+      while (*action_end && *action_end != ' ' && *action_end != '&') {
+        action_end++;
+      }
+
+      size_t action_len = action_end - action_start;
+      char action_str[16];
+
+      // Safely copy the action string
+      if (action_len > 0 && action_len < sizeof(action_str)) {
+        strncpy(action_str, action_start, action_len);
+        action_str[action_len] = '\0'; // Ensure it's null-terminated
+
+        // Find the duration parameter, default to 200ms
+        int duration = 200;
+        const char *duration_start = strstr(request, "duration=");
+        // printf("found duration: %s\n", duration_start);
+        if (duration_start) {
+          duration_start += 9; // Move pointer past "duration="
+          duration = atoi(duration_start);
+        }
+
+        // Call the handle_action function
+        handle_action(action_str, duration);
+      }
+    }
+
     return send_simple_response(tpcb, HTTP_HEADER_200_OK);
   }
+
   // Otherwise, serve the main controller page
   else if (strncmp(request, "GET / ", 6) == 0) {
     struct netif *netif = netif_default;
