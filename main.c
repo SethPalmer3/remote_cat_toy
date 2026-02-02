@@ -1,3 +1,5 @@
+#include "hardware/flash.h"
+#include "hardware/sync.h"
 #include "lwip/tcp.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdlib.h"
@@ -6,14 +8,27 @@
 #include <string.h>
 
 #include "callbacks.h"
-#define WIFI_SSID "MOTOA060"
-#define WIFI_PASS "808n7ne2u3"
+#include "storage.h"
+#include "wheel_controller.h"
+#include "wifi_saver.h"
+// #include "storage.h"
+
 #define TCP_SERVER_PORT 80
 
-#define MAX_TRIES 5
+#define MAX_TRIES 3
+#define LEFT_FORWARD 2
+#define LEFT_BACKWARD 3
+#define RIGHT_FORWARD 12
+#define RIGHT_BACKWARD 13
+
+int provision_mode = 0;
 
 int main(void) {
   stdio_init_all();
+
+  // while (!stdio_usb_connected()) {
+  //   sleep_ms(100);
+  // }
   if (cyw43_arch_init_with_country(CYW43_COUNTRY_USA)) {
     printf("failed to initalise\n");
     return 1;
@@ -23,17 +38,32 @@ int main(void) {
   printf("station mode enabled\n");
 
   int tries = 0;
-  while (cyw43_arch_wifi_connect_timeout_ms(WIFI_SSID, WIFI_PASS,
-                                            CYW43_AUTH_WPA2_AES_PSK, 10000) &&
+  char ssid[SSID_MAX_LEN];
+  char pass[MAX_PASS_LEN];
+  // memcpy(ssid, "MOTOA060h", strlen("MOTOA060h"));
+  // memcpy(pass, "808n7ne2u3", strlen("808n7ne2u3"));
+
+  memcpy(ssid, read_ssid(), SSID_MAX_LEN);
+  memcpy(pass, read_password(), MAX_PASS_LEN);
+  printf("Trying to connect to \'%s\', with \'%s\'\n", ssid, pass);
+  while (cyw43_arch_wifi_connect_timeout_ms(ssid, pass, CYW43_AUTH_WPA2_AES_PSK,
+                                            10000) &&
          tries < MAX_TRIES) {
     printf("failed to connect, retrying\n");
     tries++;
   }
   if (tries >= MAX_TRIES) {
-    printf("Could not connect, exiting\n");
-    return 1;
+    printf("Starting own AP\n");
+    provision_mode = 1;
+    collect_wifi();
+  } else {
+    provision_mode = 0;
   }
   printf("connected\n");
+  printf("setting up wheel pins\n");
+  wheel_init(LEFT_FORWARD, LEFT_BACKWARD);
+  wheel_init(RIGHT_FORWARD, RIGHT_BACKWARD);
+
   struct tcp_pcb *pcb;
   pcb = tcp_new_ip_type(IPADDR_TYPE_ANY);
   if (!pcb) {
@@ -67,7 +97,8 @@ int main(void) {
   printf("accept callback registered. server is ready\n");
 
   while (1) {
-    sleep_ms(1000);
+    sleep_ms(10);
+    cyw43_arch_poll();
   }
   return EXIT_SUCCESS;
 }
